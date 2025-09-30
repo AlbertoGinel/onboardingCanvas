@@ -1,13 +1,8 @@
 <template>
   <v-image
     :config="{
-      image: imageElement,
-      x: imageObj.x,
-      y: imageObj.y,
-      width: imageObj.width,
-      height: imageObj.height,
-      draggable: true,
-      opacity: imageObj.isDragging ? 0.8 : 1,
+      image: imageElementRef,
+      ...props.imageElement.getKonvaConfig(),
     }"
     @click="handleClick"
     @tap="handleClick"
@@ -32,42 +27,34 @@
   />
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
+import { ImageElement } from '../models/ImageElement'
+import type { KonvaNode } from '../types/konva'
 
-const props = defineProps({
-  imageObj: {
-    type: Object,
-    required: true
-  },
-  isSelected: {
-    type: Boolean,
-    default: false
-  }
-})
+const props = defineProps<{
+  imageElement: ImageElement
+  isSelected: boolean
+}>()
 
-const emit = defineEmits(['select', 'drag-start', 'drag-end', 'transform', 'context-menu', 'upload-complete'])
+const emit = defineEmits<{
+  select: []
+  'drag-start': []
+  'drag-end': [{ x: number, y: number }]
+  transform: [{ width: number, height: number }]
+  'context-menu': [Event]
+  'upload-complete': [any]
+  'elementUpdated': [ImageElement]
+}>()
 
-const imageElement = ref(null)
-const imageNode = ref(null)
-const fileInput = ref(null)
+const imageElementRef = ref<HTMLImageElement | HTMLCanvasElement | null>(null)
+const imageNode = ref<KonvaNode | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
 
-const transformerConfig = {
-  rotateEnabled: true,
-  enabledAnchors: [
-    'top-left', 'top-center', 'top-right',
-    'middle-left', 'middle-right',
-    'bottom-left', 'bottom-center', 'bottom-right'
-  ],
-  boundBoxFunc: (oldBox, newBox) => {
-    // Maintain aspect ratio when shift is held (optional)
-    newBox.width = Math.max(30, newBox.width);
-    newBox.height = Math.max(30, newBox.height);
-    return newBox;
-  },
-}
+// Use the transformer config from the class
+const transformerConfig = props.imageElement.getTransformerConfig()
 
-function setImageRef(el) {
+function setImageRef(el: any) {
   imageNode.value = el?.getNode?.() || null
 }
 
@@ -76,10 +63,10 @@ function loadImage() {
   img.crossOrigin = 'anonymous'
   
   img.onload = () => {
-    imageElement.value = img
+    imageElementRef.value = img
     
     // If no dimensions set, use natural dimensions (scaled down if too large)
-    if (!props.imageObj.width || !props.imageObj.height) {
+    if (!props.imageElement.width || !props.imageElement.height) {
       const maxSize = 300
       const aspectRatio = img.naturalWidth / img.naturalHeight
       
@@ -96,6 +83,8 @@ function loadImage() {
         }
       }
       
+      // Update the class instance
+      props.imageElement.setDimensions(Math.round(width), Math.round(height))
       emit('transform', { 
         width: Math.round(width), 
         height: Math.round(height) 
@@ -104,12 +93,12 @@ function loadImage() {
   }
   
   img.onerror = () => {
-    console.error('Failed to load image:', props.imageObj.src)
+    console.error('Failed to load image:', props.imageElement.src)
     // Load a fallback placeholder
     loadPlaceholder()
   }
   
-  img.src = props.imageObj.src
+  img.src = props.imageElement.src
 }
 
 function loadPlaceholder() {
@@ -119,29 +108,31 @@ function loadPlaceholder() {
   canvas.height = 150
   const ctx = canvas.getContext('2d')
   
-  // Draw placeholder
-  ctx.fillStyle = '#f0f0f0'
-  ctx.fillRect(0, 0, 200, 150)
-  ctx.strokeStyle = '#ccc'
-  ctx.strokeRect(0, 0, 200, 150)
+  if (ctx) {
+    // Draw placeholder
+    ctx.fillStyle = '#f0f0f0'
+    ctx.fillRect(0, 0, 200, 150)
+    ctx.strokeStyle = '#ccc'
+    ctx.strokeRect(0, 0, 200, 150)
+    
+    // Draw X
+    ctx.strokeStyle = '#999'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(20, 20)
+    ctx.lineTo(180, 130)
+    ctx.moveTo(180, 20)
+    ctx.lineTo(20, 130)
+    ctx.stroke()
+    
+    // Add text
+    ctx.fillStyle = '#666'
+    ctx.font = '16px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText('Image not found', 100, 80)
+  }
   
-  // Draw X
-  ctx.strokeStyle = '#999'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(20, 20)
-  ctx.lineTo(180, 130)
-  ctx.moveTo(180, 20)
-  ctx.lineTo(20, 130)
-  ctx.stroke()
-  
-  // Add text
-  ctx.fillStyle = '#666'
-  ctx.font = '16px Arial'
-  ctx.textAlign = 'center'
-  ctx.fillText('Image not found', 100, 80)
-  
-  imageElement.value = canvas
+  imageElementRef.value = canvas
 }
 
 function handleClick() {
@@ -149,42 +140,19 @@ function handleClick() {
 }
 
 function handleDragStart() {
-  emit('drag-start')
+  props.imageElement.handleDragStart(() => emit('drag-start'))
 }
 
-function handleDragEnd(evt) {
-  const newPosition = {
-    x: evt.target.x(),
-    y: evt.target.y()
-  }
-  emit('drag-end', newPosition)
+function handleDragEnd(evt: any) {
+  props.imageElement.handleDragEnd(evt, (element) => emit('elementUpdated', element))
 }
 
-function handleTransform(e) {
-  const node = imageNode.value
-  if (!node) return
-  
-  const scaleX = node.scaleX()
-  const scaleY = node.scaleY()
-  
-  // Reset scale and apply to width/height instead
-  node.scaleX(1)
-  node.scaleY(1)
-  
-  const newWidth = Math.max(30, node.width() * scaleX)
-  const newHeight = Math.max(30, node.height() * scaleY)
-  
-  node.width(newWidth)
-  node.height(newHeight)
-  
-  emit('transform', { 
-    width: Math.round(newWidth), 
-    height: Math.round(newHeight) 
-  })
+function handleTransform(e: any) {
+  props.imageElement.handleTransform(e, imageNode.value, (element) => emit('elementUpdated', element))
 }
 
 // Watch for src changes
-watch(() => props.imageObj.src, () => {
+watch(() => props.imageElement.src, () => {
   loadImage()
 }, { immediate: true })
 
@@ -193,24 +161,28 @@ function triggerUpload() {
   fileInput.value?.click()
 }
 
-function handleFileUpload(event) {
-  const file = event.target.files[0]
+function handleFileUpload(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
   if (file && file.type.startsWith('image/')) {
     const reader = new FileReader()
     reader.onload = (e) => {
-      // Emit the upload result back to parent
-      emit('upload-complete', {
-        src: e.target.result, // Base64 data URL
-        x: 120,
-        y: 120,
-        width: 0, // Will be auto-calculated
-        height: 0, // Will be auto-calculated
-        isDragging: false,
-      })
+      const result = e.target?.result
+      if (result) {
+        // Emit the upload result back to parent
+        emit('upload-complete', {
+          src: result, // Base64 data URL
+          x: 120,
+          y: 120,
+          width: 0, // Will be auto-calculated
+          height: 0, // Will be auto-calculated
+          isDragging: false,
+        })
+      }
     }
     reader.readAsDataURL(file)
     // Reset the input so the same file can be selected again
-    event.target.value = ''
+    target.value = ''
   }
 }
 

@@ -1,16 +1,9 @@
 <template>
   <v-text
     :config="{
-      text: textObj.text,
-      x: textObj.x,
-      y: textObj.y,
-      draggable: true,
-      fill: textObj.isDragging ? 'green' : 'black',
-      fontSize: 30,
-      width: textObj.width || 200,
+      ...props.textElement.getKonvaConfig(),
       visible: !isEditing,
     }"
-    @contextmenu="handleContextMenu"
     @click="handleClick"
     @tap="handleClick"
     @dblclick="handleTextDblClick"
@@ -27,40 +20,38 @@
   />
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { TextElement } from '../models/TextElement'
+import type { KonvaNode } from '../types/konva'
 
-const props = defineProps({
-  textObj: {
-    type: Object,
-    required: true
-  },
-  isSelected: {
-    type: Boolean,
-    default: false
-  }
-})
+const props = defineProps<{
+  textElement: TextElement
+  isSelected: boolean
+}>()
 
-const emit = defineEmits(['update:text', 'select', 'drag-start', 'drag-end', 'transform', 'context-menu'])
+const emit = defineEmits<{
+  select: []
+  'drag-start': []
+  'drag-end': [{ x: number, y: number }]
+  transform: [{ width: number, height: number }]
+  'elementUpdated': [TextElement]
+}>()
 
 // Fix text rendering issue in Konva
 if (window.Konva) {
   window.Konva._fixTextRendering = true;
 }
 
+console.log('EditableText component mounted with:', props.textElement)
+
 const isEditing = ref(false)
-const textNode = ref(null)
+const textNode = ref<KonvaNode | null>(null)
 
-const transformerConfig = {
-  rotateEnabled: true,
-  enabledAnchors: ['middle-left', 'middle-right'],
-  boundBoxFunc: (oldBox, newBox) => {
-    newBox.width = Math.max(30, newBox.width);
-    return newBox;
-  },
-}
+// Use the transformer config from the class
+const transformerConfig = props.textElement.getTransformerConfig()
 
-function setTextRef(el) {
+function setTextRef(el: any) {
   textNode.value = el?.getNode?.() || null
 }
 
@@ -68,35 +59,18 @@ function handleClick() {
   emit('select')
 }
 
-function handleContextMenu(evt) {
-  evt.evt.preventDefault()
-  emit('context-menu', evt)
-}
+
 
 function handleDragStart() {
-  emit('drag-start')
+  props.textElement.handleDragStart(() => emit('drag-start'))
 }
 
-function handleDragEnd(evt) {
-  const newPosition = {
-    x: evt.target.x(),
-    y: evt.target.y()
-  }
-  emit('drag-end', newPosition)
+function handleDragEnd(evt: any) {
+  props.textElement.handleDragEnd(evt, (element) => emit('elementUpdated', element))
 }
 
-function handleTransform(e) {
-  const node = textNode.value
-  if (!node) return
-  
-  const newWidth = node.width() * node.scaleX()
-  
-  node.setAttrs({
-    width: newWidth,
-    scaleX: 1,
-  })
-  
-  emit('transform', { width: newWidth })
+function handleTransform(e: any) {
+  props.textElement.handleTransform(e, textNode.value, (element) => emit('elementUpdated', element))
 }
 
 function handleTextDblClick() {
@@ -117,13 +91,13 @@ function handleTextDblClick() {
   const textarea = document.createElement('textarea');
   document.body.appendChild(textarea);
 
-  textarea.value = node.text();
+  textarea.value = props.textElement.text;
   textarea.style.position = 'absolute';
   textarea.style.top = areaPosition.y + 'px';
   textarea.style.left = areaPosition.x + 'px';
   textarea.style.width = node.width() - node.padding() * 2 + 'px';
   textarea.style.height = node.height() - node.padding() * 2 + 5 + 'px';
-  textarea.style.fontSize = node.fontSize() + 'px';
+  textarea.style.fontSize = props.textElement.fontSize + 'px';
   textarea.style.border = 'none';
   textarea.style.padding = '0px';
   textarea.style.margin = '0px';
@@ -131,11 +105,11 @@ function handleTextDblClick() {
   textarea.style.background = 'none';
   textarea.style.outline = 'none';
   textarea.style.resize = 'none';
-  textarea.style.lineHeight = node.lineHeight();
-  textarea.style.fontFamily = node.fontFamily() || 'Arial';
+  textarea.style.lineHeight = String(node.lineHeight());
+  textarea.style.fontFamily = props.textElement.fontFamily || 'Arial';
   textarea.style.transformOrigin = 'left top';
-  textarea.style.textAlign = node.align() || 'left';
-  textarea.style.color = node.fill() || 'black';
+  textarea.style.textAlign = 'left';
+  textarea.style.color = props.textElement.fill || 'black';
 
   const rotation = node.rotation();
   let transform = '';
@@ -159,16 +133,18 @@ function handleTextDblClick() {
     isEditing.value = false;
   }
 
-  function setTextareaWidth(newWidth) {
+  function setTextareaWidth(newWidth: number) {
     if (!newWidth) {
-      newWidth = node.placeholder?.length * node.fontSize() || 200;
+      newWidth = props.textElement.text.length * props.textElement.fontSize || 200;
     }
     textarea.style.width = newWidth + 'px';
   }
 
   textarea.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
-      emit('update:text', textarea.value);
+      // Update the text element
+      props.textElement.text = textarea.value;
+      emit('elementUpdated', props.textElement);
       removeTextarea();
     }
     if (e.key === 'Escape') {
@@ -180,12 +156,14 @@ function handleTextDblClick() {
     const scale = node.getAbsoluteScale().x;
     setTextareaWidth(node.width() * scale);
     textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + node.fontSize() + 'px';
+    textarea.style.height = textarea.scrollHeight + props.textElement.fontSize + 'px';
   });
 
-  function handleOutsideClick(e) {
+  function handleOutsideClick(e: any) {
     if (e.target !== textarea) {
-      emit('update:text', textarea.value);
+      // Update the text element
+      props.textElement.text = textarea.value;
+      emit('elementUpdated', props.textElement);
       removeTextarea();
     }
   }
